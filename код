@@ -1,0 +1,153 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <Servo.h>
+
+// ----- НАСТРОЙКИ -----
+#define TOTAL_PLACES 5
+#define BUTTON_PIN 13
+
+int trigPins[TOTAL_PLACES] = {2, 4, 7, 9, 11};
+int echoPins[TOTAL_PLACES] = {3, 5, 8, 10, 12};
+
+#define SERVO_PIN 6
+
+LiquidCrystal_I2C lcd(0x20, 16, 2); // если не работает — попробуй 0x27
+Servo gate;
+
+// ----- ПЕРЕМЕННЫЕ -----
+long duration;
+float distance[TOTAL_PLACES];
+bool busy[TOTAL_PLACES];
+
+bool gateState = false;        // текущее состояние шлагбаума
+bool manualControl = false;    // активировано ли ручное управление
+bool lastButtonState = HIGH;
+
+void setup() {
+  for (int i = 0; i < TOTAL_PLACES; i++) {
+    pinMode(trigPins[i], OUTPUT);
+    pinMode(echoPins[i], INPUT);
+    busy[i] = false;
+  }
+
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+
+  gate.attach(SERVO_PIN);
+  gate.write(0);
+
+  lcd.init();
+  lcd.backlight();
+
+  lcd.setCursor(0, 0);
+  lcd.print("Parking system");
+  lcd.setCursor(0, 1);
+  lcd.print("5 places");
+  delay(2000);
+  lcd.clear();
+}
+
+void loop() {
+  int freePlaces = 0;
+  bool error = false;
+
+  // ---- КНОПКА ----
+  bool currentButtonState = digitalRead(BUTTON_PIN);
+
+  if (lastButtonState == HIGH && currentButtonState == LOW) {
+    manualControl = true;          // включаем ручное управление
+    gateState = !gateState;        // меняем состояние
+    delay(200);                    // антидребезг
+  }
+
+  lastButtonState = currentButtonState;
+
+  // ---- LCD страницы ----
+  static bool page = false;
+  static unsigned long lastSwitch = 0;
+
+  if (millis() - lastSwitch >= 2000) {
+    page = !page;
+    lastSwitch = millis();
+  }
+
+  // ---- ДАТЧИКИ ----
+  for (int i = 0; i < TOTAL_PLACES; i++) {
+    digitalWrite(trigPins[i], LOW);
+    delayMicroseconds(2);
+    digitalWrite(trigPins[i], HIGH);
+    delayMicroseconds(10);
+    digitalWrite(trigPins[i], LOW);
+
+    duration = pulseIn(echoPins[i], HIGH, 30000);
+    distance[i] = duration * 0.034 / 2;
+
+    delay(60);
+
+    if (duration == 0 || distance[i] < 0.1 || distance[i] > 40) {
+      error = true;
+      busy[i] = false;
+    } 
+    else if (distance[i] < 10) {
+      busy[i] = true;
+    } 
+    else {
+      busy[i] = false;
+      freePlaces++;
+    }
+  }
+
+  lcd.clear();
+
+  if (error) {
+    lcd.setCursor(0, 0);
+    lcd.print("SENSOR ERROR");
+    lcd.setCursor(0, 1);
+    lcd.print("Check parking");
+    gate.write(0);
+    delay(500);
+    return;
+  }
+
+  // ---- LCD ВЕРХ ----
+  lcd.setCursor(0, 0);
+  lcd.print("Free: ");
+  lcd.print(freePlaces);
+  lcd.print("/5");
+
+  // ---- LCD НИЗ ----
+  lcd.setCursor(0, 1);
+
+  if (!page) {
+    lcd.print("P1:");
+    lcd.print(busy[0] ? "B " : "F ");
+    lcd.print("P2:");
+    lcd.print(busy[1] ? "B " : "F ");
+    lcd.print("P3:");
+    lcd.print(busy[2] ? "B" : "F");
+  } else {
+    lcd.print("P4:");
+    lcd.print(busy[3] ? "B " : "F ");
+    lcd.print("P5:");
+    lcd.print(busy[4] ? "B" : "F ");
+  }
+
+  // ---- ШЛАГБАУМ ----
+  if (manualControl) {
+    // ручное управление
+    if (gateState) {
+      gate.write(90);
+    } else {
+      gate.write(0);
+    }
+  } else {
+    // автоматический режим
+    if (freePlaces > 0) {
+      gate.write(90);
+    } else {
+      gate.write(0);
+    
+    }
+  }
+
+  delay(200);
+}
